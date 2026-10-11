@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <name>Protected Wildlife Reserves</name>
+    <Placemark>
+      <name>Bannerghatta Biological Zone</name>
+      <description>National park conservation zone with elephant corridor</description>
+      <ExtendedData>
+        <Data name="category"><value>National Park</value></Data>
+        <Data name="established"><value>1971</value></Data>
+      </ExtendedData>
+      <Polygon>
+        <outerBoundaryIs>
+          <LinearRing>
+            <coordinates>
+              77.5600,12.7800,0
+              77.6100,12.7800,0
+              77.6100,12.8300,0
+              77.5600,12.8300,0
+              77.5600,12.7800,0
+            </coordinates>
+          </LinearRing>
+        </outerBoundaryIs>
+      </Polygon>
+    </Placemark>
+    <Placemark>
+      <name>Hesaraghatta Grasslands</name>
+      <description>Ecological sensitive bird sanctuary and wetland</description>
+      <ExtendedData>
+        <Data name="category"><value>Wetland Reserve</value></Data>
+      </ExtendedData>
+      <Polygon>
+        <outerBoundaryIs>
+          <LinearRing>
+            <coordinates>
+              77.4700,13.1400,0
+              77.5100,13.1400,0
+              77.5100,13.1700,0
+              77.4700,13.1700,0
+              77.4700,13.1400,0
+            </coordinates>
+          </LinearRing>
+        </outerBoundaryIs>
+      </Polygon>
+    </Placemark>
+  </Document>
+</kml>

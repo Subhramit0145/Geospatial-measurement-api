@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <name>Nandi Hills Trekking Trails</name>
+    <Placemark>
+      <name>Sunrise Summit Ridge Path</name>
+      <description>Moderate difficulty trekking trail with scenic views</description>
+      <ExtendedData>
+        <Data name="difficulty"><value>Moderate</value></Data>
+      </ExtendedData>
+      <LineString>
+        <coordinates>
+          77.6750,13.3650,0
+          77.6800,13.3700,0
+          77.6830,13.3740,0
+          77.6850,13.3800,0
+        </coordinates>
+      </LineString>
+    </Placemark>
+  </Document>
+</kml>
