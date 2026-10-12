@@ -11,8 +11,7 @@ Performs automatic projection into an optimal local metric CRS (e.g. UTM) before
 measurement so results are accurate physical quantities instead of degree approximations.
 """
 
-from __future__ import annotations
-
+import functools
 import logging
 from dataclasses import dataclass
 from typing import Optional
@@ -41,6 +40,16 @@ class MeasurementResult:
     projected_crs: Optional[str] = None
 
 
+@functools.lru_cache(maxsize=512)
+def get_transformer(source_crs: str, target_crs: str) -> pyproj.Transformer:
+    """
+    Cached PyProj Transformer factory.
+    Caches underlying C Proj coordinate transformation pipelines, eliminating
+    heavy repeat initialization across thousands of features in high-load scenarios.
+    """
+    return pyproj.Transformer.from_crs(source_crs, target_crs, always_xy=True)
+
+
 def reproject_geometry(
     geometry: BaseGeometry,
     source_crs: str,
@@ -50,7 +59,7 @@ def reproject_geometry(
     Transform a geometry between coordinate reference systems using PyProj.
     Uses always_xy=True to enforce (lon, lat) / (x, y) order consistently.
     """
-    transformer = pyproj.Transformer.from_crs(source_crs, target_crs, always_xy=True)
+    transformer = get_transformer(source_crs, target_crs)
 
     try:
         # Modern Shapely 2.0+ vectorized coordinate transformation
@@ -62,6 +71,7 @@ def reproject_geometry(
         logger.debug("Vectorized transform failed, falling back to shapely.ops.transform: %s", exc)
         from shapely.ops import transform as ops_transform
         return ops_transform(transformer.transform, geometry)
+
 
 
 def compute_measurement(

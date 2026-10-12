@@ -18,7 +18,7 @@ import os
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
 from shapely import wkt
 from shapely.geometry import mapping
 from sqlalchemy.orm import Session
@@ -34,6 +34,7 @@ from app.schemas import (
     MeasurementSummary,
     MeasurementsResponse,
 )
+from app.services.cache import cache
 from app.services.file_parser import FileParseError, parse_file
 from app.services.measurement import compute_measurement
 from app.utils.exceptions import FileNotFoundError_, UnsupportedFileError
@@ -41,6 +42,7 @@ from app.utils.exceptions import FileNotFoundError_, UnsupportedFileError
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/files", tags=["geospatial-files"])
+
 
 ALLOWED_EXTENSIONS = {".zip", ".kml"}
 
@@ -119,26 +121,35 @@ def upload_file(
         geo_file.feature_count = len(raw_features)
 
         # Process each feature and compute geometric measurements
+        db_features = []
         for feat in raw_features:
             geom = wkt.loads(feat["geometry_wkt"])
             measurement_res = compute_measurement(geom, feat["geometry_type"], crs_str)
 
-            db_feature = Feature(
-                file_id=geo_file.id,
-                feature_index=feat["index"],
-                geometry_type=feat["geometry_type"],
-                geometry_wkt=feat["geometry_wkt"],
-                measurement_value=measurement_res.value,
-                measurement_unit=measurement_res.unit,
-                measurement_type=measurement_res.measurement_type,
-                projected_crs=measurement_res.projected_crs,
-                properties_json=json.dumps(feat.get("properties", {})),
+            db_features.append(
+                Feature(
+                    file_id=geo_file.id,
+                    feature_index=feat["index"],
+                    geometry_type=feat["geometry_type"],
+                    geometry_wkt=feat["geometry_wkt"],
+                    measurement_value=measurement_res.value,
+                    measurement_unit=measurement_res.unit,
+                    measurement_type=measurement_res.measurement_type,
+                    projected_crs=measurement_res.projected_crs,
+                    properties_json=json.dumps(feat.get("properties", {})),
+                )
             )
-            db.add(db_feature)
+
+        # High-performance bulk database insert
+        if db_features:
+            db.add_all(db_features)
 
         geo_file.status = "COMPLETED"
         db.commit()
         db.refresh(geo_file)
+
+        # Invalidate file list cache
+        cache.delete_pattern("files_list:*")
 
     except (FileParseError, UnsupportedFileError) as exc:
         geo_file.status = "FAILED"
@@ -173,10 +184,17 @@ def upload_file(
     description="Retrieve a paginated list of all uploaded geospatial files.",
 )
 def list_files(
+    response: Response,
     skip: int = Query(0, ge=0, description="Offset"),
     limit: int = Query(20, ge=1, le=100, description="Page size"),
     db: Session = Depends(get_db),
 ):
+    cache_key = f"files_list:{skip}:{limit}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        response.headers["X-Cache"] = "HIT"
+        return cached
+
     total = db.query(GeoFile).count()
     items = (
         db.query(GeoFile)
@@ -186,7 +204,7 @@ def list_files(
         .all()
     )
 
-    return FileListResponse(
+    result = FileListResponse(
         total=total,
         files=[
             FileInfoResponse(
@@ -201,6 +219,9 @@ def list_files(
             for f in items
         ],
     )
+    cache.set(cache_key, result.model_dump(mode="json"), ttl=30)
+    response.headers["X-Cache"] = "MISS"
+    return result
 
 
 # ── GET /api/files/{file_id}/ ──────────────────────────────────────
@@ -211,12 +232,18 @@ def list_files(
     summary="Get file information",
     description="Retrieve metadata about an uploaded geospatial file by ID.",
 )
-def get_file_info(file_id: str, db: Session = Depends(get_db)):
+def get_file_info(file_id: str, response: Response, db: Session = Depends(get_db)):
+    cache_key = f"file_info:{file_id}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        response.headers["X-Cache"] = "HIT"
+        return cached
+
     geo_file = db.query(GeoFile).filter(GeoFile.id == file_id).first()
     if not geo_file:
         raise FileNotFoundError_(file_id)
 
-    return FileInfoResponse(
+    result = FileInfoResponse(
         id=geo_file.id,
         filename=geo_file.filename,
         feature_count=geo_file.feature_count,
@@ -225,6 +252,9 @@ def get_file_info(file_id: str, db: Session = Depends(get_db)):
         error_message=geo_file.error_message,
         created_at=geo_file.created_at,
     )
+    cache.set(cache_key, result.model_dump(mode="json"), ttl=300)
+    response.headers["X-Cache"] = "MISS"
+    return result
 
 
 # ── GET /api/files/{file_id}/measurements/ ─────────────────────────
@@ -235,7 +265,13 @@ def get_file_info(file_id: str, db: Session = Depends(get_db)):
     summary="Get feature measurements",
     description="Retrieve geometric measurements (area / length) for all features in the file.",
 )
-def get_measurements(file_id: str, db: Session = Depends(get_db)):
+def get_measurements(file_id: str, response: Response, db: Session = Depends(get_db)):
+    cache_key = f"file_measurements:{file_id}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        response.headers["X-Cache"] = "HIT"
+        return cached
+
     geo_file = db.query(GeoFile).filter(GeoFile.id == file_id).first()
     if not geo_file:
         raise FileNotFoundError_(file_id)
@@ -308,7 +344,7 @@ def get_measurements(file_id: str, db: Session = Depends(get_db)):
         total_length_meters=round(total_length, 4) if linestrings_count > 0 else None,
     )
 
-    return MeasurementsResponse(
+    result = MeasurementsResponse(
         file_id=geo_file.id,
         filename=geo_file.filename,
         crs=geo_file.original_crs,
@@ -316,6 +352,9 @@ def get_measurements(file_id: str, db: Session = Depends(get_db)):
         summary=summary,
         measurements=measurements_list,
     )
+    cache.set(cache_key, result.model_dump(mode="json"), ttl=300)
+    response.headers["X-Cache"] = "MISS"
+    return result
 
 
 # ── GET /api/files/{file_id}/geojson/ ──────────────────────────────
@@ -325,7 +364,13 @@ def get_measurements(file_id: str, db: Session = Depends(get_db)):
     summary="Export as GeoJSON FeatureCollection",
     description="Export all parsed features with their measurements as standard GeoJSON.",
 )
-def export_geojson(file_id: str, db: Session = Depends(get_db)):
+def export_geojson(file_id: str, response: Response, db: Session = Depends(get_db)):
+    cache_key = f"file_geojson:{file_id}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        response.headers["X-Cache"] = "HIT"
+        return cached
+
     geo_file = db.query(GeoFile).filter(GeoFile.id == file_id).first()
     if not geo_file:
         raise FileNotFoundError_(file_id)
@@ -365,7 +410,7 @@ def export_geojson(file_id: str, db: Session = Depends(get_db)):
             "properties": props,
         })
 
-    return {
+    data = {
         "type": "FeatureCollection",
         "name": geo_file.filename,
         "crs": {
@@ -374,6 +419,9 @@ def export_geojson(file_id: str, db: Session = Depends(get_db)):
         },
         "features": geojson_features,
     }
+    cache.set(cache_key, data, ttl=300)
+    response.headers["X-Cache"] = "MISS"
+    return data
 
 
 # ── DELETE /api/files/{file_id}/ ───────────────────────────────────
@@ -389,6 +437,12 @@ def delete_file(file_id: str, db: Session = Depends(get_db)):
     if not geo_file:
         raise FileNotFoundError_(file_id)
 
+    # Invalidate cached endpoints for this file and list
+    cache.delete(f"file_info:{file_id}")
+    cache.delete(f"file_measurements:{file_id}")
+    cache.delete(f"file_geojson:{file_id}")
+    cache.delete_pattern("files_list:*")
+
     # Delete local file if it exists
     upload_dir = settings.ensure_upload_dir()
     for candidate in upload_dir.glob(f"{Path(geo_file.filename).stem}*"):
@@ -401,3 +455,4 @@ def delete_file(file_id: str, db: Session = Depends(get_db)):
     db.delete(geo_file)
     db.commit()
     return None
+

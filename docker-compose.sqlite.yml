@@ -1,0 +1,22 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: geospatial-measurement-api-sqlite
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=sqlite:////app/geo_api.db
+      - UPLOAD_DIR=/app/uploads
+      - MAX_UPLOAD_SIZE_MB=50
+      - WORKERS=4
+      - CACHE_ENABLED=true
+    volumes:
+      - ./uploads:/app/uploads
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3

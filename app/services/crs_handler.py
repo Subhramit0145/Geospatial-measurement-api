@@ -21,6 +21,7 @@ Implements an adaptive projection strategy for geospatial features:
 
 from __future__ import annotations
 
+import functools
 import logging
 import math
 from typing import Optional
@@ -31,21 +32,26 @@ from shapely.geometry.base import BaseGeometry
 logger = logging.getLogger(__name__)
 
 
-def is_geographic_crs(crs_input: Optional[str]) -> bool:
-    """
-    Determine if a given CRS string represents an angular/geographic coordinate system.
-    """
-    if not crs_input:
-        return True
-
+@functools.lru_cache(maxsize=1024)
+def _is_geographic_crs_cached(crs_input: str) -> bool:
     try:
         crs = CRS.from_user_input(crs_input)
-        return crs.is_geographic
+        return bool(crs.is_geographic)
     except Exception:
-        # If unparseable but formatted like EPSG:4326
         if "4326" in str(crs_input):
             return True
         return False
+
+
+def is_geographic_crs(crs_input: Optional[str]) -> bool:
+    """
+    Determine if a given CRS string represents an angular/geographic coordinate system.
+    Cached for sub-microsecond evaluation across high-volume feature streams.
+    """
+    if not crs_input:
+        return True
+    return _is_geographic_crs_cached(str(crs_input).strip())
+
 
 
 def get_utm_epsg_for_coordinates(lon: float, lat: float) -> int:

@@ -1,20 +1,80 @@
 services:
+  # Nginx reverse proxy and load balancer
+  nginx:
+    image: nginx:alpine
+    container_name: geospatial-nginx-lb
+    ports:
+      - "8000:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # High-throughput FastAPI application instances
   api:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: geospatial-measurement-api
-    ports:
-      - "8000:8000"
     environment:
-      - DATABASE_URL=sqlite:////app/geo_api.db
+      - DATABASE_URL=postgresql://geouser:geopassword@postgres:5432/geodb
+      - REDIS_URL=redis://redis:6379/0
+      - WORKERS=4
+      - DB_POOL_SIZE=50
+      - DB_MAX_OVERFLOW=100
       - UPLOAD_DIR=/app/uploads
       - MAX_UPLOAD_SIZE_MB=50
+      - CACHE_ENABLED=true
+      - CACHE_DEFAULT_TTL=300
     volumes:
       - ./uploads:/app/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
+      interval: 10s
       timeout: 5s
-      retries: 3
+      retries: 5
+
+  # Production PostgreSQL Database with connection tuning
+  postgres:
+    image: postgres:16-alpine
+    container_name: geospatial-postgres
+    environment:
+      - POSTGRES_USER=geouser
+      - POSTGRES_PASSWORD=geopassword
+      - POSTGRES_DB=geodb
+    command: >
+      postgres
+      -c max_connections=200
+      -c shared_buffers=256MB
+      -c work_mem=16MB
+      -c maintenance_work_mem=64MB
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U geouser -d geodb"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Redis In-Memory Cache for Sub-Millisecond Response Times
+  redis:
+    image: redis:7-alpine
+    container_name: geospatial-redis
+    command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru --appendonly no
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  postgres_data:

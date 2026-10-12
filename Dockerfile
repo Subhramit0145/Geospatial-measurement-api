@@ -37,5 +37,11 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-# Launch uvicorn ASGI server
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Launch high-concurrency multi-worker ASGI server
+ENV WORKERS=4 \
+    LIMIT_CONCURRENCY=2000 \
+    BACKLOG=4096 \
+    TIMEOUT_KEEP_ALIVE=30
+
+CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers ${WORKERS} --limit-concurrency ${LIMIT_CONCURRENCY} --backlog ${BACKLOG} --timeout-keep-alive ${TIMEOUT_KEEP_ALIVE}"]
+
